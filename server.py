@@ -1,11 +1,28 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Header
 from fastapi.responses import JSONResponse
 import asyncio
+import os
 from datetime import datetime, timezone
 
 app = FastAPI()
 
 connected_laptops = {}
+
+# Read the private token from Render Environment Variables
+REMOTE_TOKEN = os.getenv("REMOTE_TOKEN")
+
+if not REMOTE_TOKEN:
+    print("WARNING: REMOTE_TOKEN is not configured")
+
+
+def check_token(authorization: str | None):
+    expected = f"Bearer {REMOTE_TOKEN}"
+
+    if not REMOTE_TOKEN or authorization != expected:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing token"
+        )
 
 
 @app.get("/")
@@ -33,9 +50,10 @@ async def laptop_websocket(websocket: WebSocket, laptop_id: str):
             data = await websocket.receive_json()
 
             if data.get("type") == "heartbeat":
-                connected_laptops[laptop_id]["last_seen"] = datetime.now(timezone.utc)
+                connected_laptops[laptop_id]["last_seen"] = (
+                    datetime.now(timezone.utc)
+                )
                 connected_laptops[laptop_id]["status"] = "online"
-                print(f"Heartbeat received from {laptop_id}")
 
             elif data.get("type") == "command_result":
                 print(
@@ -64,24 +82,45 @@ async def get_laptops():
 
 
 @app.post("/command/{laptop_id}")
-async def send_command(laptop_id: str, command: dict):
+async def send_command(
+    laptop_id: str,
+    command: dict,
+    authorization: str | None = Header(default=None)
+):
+    check_token(authorization)
+
     if laptop_id not in connected_laptops:
         raise HTTPException(
             status_code=404,
             detail="Laptop is offline"
         )
 
+    allowed_commands = {
+        "lock",
+        "sleep",
+        "restart",
+        "shutdown"
+    }
+
+    requested_command = command.get("command")
+
+    if requested_command not in allowed_commands:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid command"
+        )
+
     websocket = connected_laptops[laptop_id]["websocket"]
 
     await websocket.send_json({
         "type": "command",
-        "command": command.get("command")
+        "command": requested_command
     })
 
     return {
         "success": True,
         "message": "Command sent to laptop",
-        "command": command.get("command")
+        "command": requested_command
     }
 
 
