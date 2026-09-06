@@ -1,19 +1,45 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Header
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from google import genai
+
 import asyncio
 import os
 from datetime import datetime, timezone
 
-app = FastAPI()
+
+# ====================== APP ======================
+
+app = FastAPI(title="Remote Control AI")
 
 connected_laptops = {}
 
-# Read the private token from Render Environment Variables
+
+# ====================== ENVIRONMENT VARIABLES ======================
+
 REMOTE_TOKEN = os.getenv("REMOTE_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not REMOTE_TOKEN:
     print("WARNING: REMOTE_TOKEN is not configured")
 
+if not GEMINI_API_KEY:
+    print("WARNING: GEMINI_API_KEY is not configured")
+
+
+# ====================== GEMINI AI ======================
+
+ai_client = None
+
+if GEMINI_API_KEY:
+    try:
+        ai_client = genai.Client(api_key=GEMINI_API_KEY)
+        print("Gemini AI initialized")
+    except Exception as e:
+        print(f"Gemini initialization error: {e}")
+
+
+# ====================== SECURITY ======================
 
 def check_token(authorization: str | None):
     expected = f"Bearer {REMOTE_TOKEN}"
@@ -25,6 +51,8 @@ def check_token(authorization: str | None):
         )
 
 
+# ====================== HOME ======================
+
 @app.get("/")
 async def home():
     return {
@@ -33,15 +61,17 @@ async def home():
             1
             for laptop in connected_laptops.values()
             if laptop["status"] == "online"
-        )
+        ),
+        "ai_enabled": ai_client is not None
     }
 
+
+# ====================== LAPTOP WEBSOCKET ======================
 
 @app.websocket("/ws/laptop/{laptop_id}")
 async def laptop_websocket(websocket: WebSocket, laptop_id: str):
     await websocket.accept()
 
-    # Create a unique record for this connection
     laptop_data = {
         "websocket": websocket,
         "status": "online",
@@ -54,7 +84,6 @@ async def laptop_websocket(websocket: WebSocket, laptop_id: str):
         "windows_version": None
     }
 
-    # Check whether this laptop already has another connection
     old_laptop = connected_laptops.get(laptop_id)
 
     if old_laptop:
@@ -66,7 +95,6 @@ async def laptop_websocket(websocket: WebSocket, laptop_id: str):
             except Exception:
                 pass
 
-    # Store the new active connection
     connected_laptops[laptop_id] = laptop_data
 
     print(f"Laptop connected: {laptop_id}")
@@ -75,7 +103,6 @@ async def laptop_websocket(websocket: WebSocket, laptop_id: str):
         while True:
             data = await websocket.receive_json()
 
-            # Ignore messages from an old connection
             if connected_laptops.get(laptop_id) is not laptop_data:
                 print(f"Ignoring old connection: {laptop_id}")
                 break
@@ -84,7 +111,6 @@ async def laptop_websocket(websocket: WebSocket, laptop_id: str):
                 laptop_data["last_seen"] = datetime.now(timezone.utc)
                 laptop_data["status"] = "online"
 
-                # Update laptop information
                 for key in [
                     "battery",
                     "charging",
@@ -116,13 +142,14 @@ async def laptop_websocket(websocket: WebSocket, laptop_id: str):
         print(f"WebSocket error for {laptop_id}: {e}")
 
     finally:
-        # Only clean up if this is still the active connection
         if connected_laptops.get(laptop_id) is laptop_data:
             connected_laptops[laptop_id]["status"] = "offline"
             connected_laptops[laptop_id]["websocket"] = None
 
             print(f"Marked laptop offline: {laptop_id}")
 
+
+# ====================== GET LAPTOPS ======================
 
 @app.get("/laptops")
 async def get_laptops():
@@ -146,6 +173,8 @@ async def get_laptops():
 
     return JSONResponse(content=result)
 
+
+# ====================== MANUAL COMMAND ======================
 
 @app.post("/command/{laptop_id}")
 async def send_command(
@@ -196,6 +225,80 @@ async def send_command(
     }
 
 
+# ====================== AI CHAT MODEL ======================
+
+class AIChatRequest(BaseModel):
+    message: str
+
+
+# ====================== AI CHAT ======================
+
+@app.post("/ai/chat")
+async def ai_chat(
+    request: AIChatRequest,
+    authorization: str | None = Header(default=None)
+):
+    check_token(authorization)
+
+    if ai_client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Gemini AI is not configured"
+        )
+
+    laptop = connected_laptops.get("my-laptop")
+
+    if laptop and laptop["status"] == "online":
+        laptop_context = f"""
+Laptop status: Online
+Battery: {laptop.get("battery")}%
+Charging: {laptop.get("charging")}
+CPU usage: {laptop.get("cpu_usage")}%
+RAM usage: {laptop.get("ram_usage")}%
+Hostname: {laptop.get("hostname")}
+Windows version: {laptop.get("windows_version")}
+"""
+    else:
+        laptop_context = "Laptop status: Offline"
+
+    prompt = f"""
+You are Remote Control AI, an assistant for the user's own Windows laptop.
+
+Answer clearly and briefly.
+
+You can explain laptop information and help with safe computer-management
+tasks. Do not claim that a command was executed unless the server confirms it.
+
+Current laptop information:
+{laptop_context}
+
+User message:
+{request.message}
+"""
+
+    try:
+        response = ai_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+
+        return {
+            "success": True,
+            "reply": response.text,
+            "laptop": laptop_context
+        }
+
+    except Exception as e:
+        print(f"Gemini API error: {e}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="AI request failed"
+        )
+
+
+# ====================== LAPTOP MONITOR ======================
+
 async def monitor_laptops():
     while True:
         now = datetime.now(timezone.utc)
@@ -209,13 +312,15 @@ async def monitor_laptops():
             if (now - last_seen).total_seconds() > 30:
                 print(f"Laptop timed out: {laptop_id}")
 
-                # Only mark the current connection offline
                 laptop["status"] = "offline"
                 laptop["websocket"] = None
 
         await asyncio.sleep(10)
 
 
+# ====================== STARTUP ======================
+
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(monitor_laptops())
+    print("Remote Control AI server started")
