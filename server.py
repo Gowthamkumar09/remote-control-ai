@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from google import genai
 
 import asyncio
+import json
 import os
 from datetime import datetime, timezone
 
@@ -72,6 +73,7 @@ async def home():
 
 @app.websocket("/ws/laptop/{laptop_id}")
 async def laptop_websocket(websocket: WebSocket, laptop_id: str):
+
     await websocket.accept()
 
     laptop_data = {
@@ -102,7 +104,9 @@ async def laptop_websocket(websocket: WebSocket, laptop_id: str):
     print(f"Laptop connected: {laptop_id}")
 
     try:
+
         while True:
+
             data = await websocket.receive_json()
 
             if connected_laptops.get(laptop_id) is not laptop_data:
@@ -110,6 +114,7 @@ async def laptop_websocket(websocket: WebSocket, laptop_id: str):
                 break
 
             if data.get("type") == "heartbeat":
+
                 laptop_data["last_seen"] = datetime.now(timezone.utc)
                 laptop_data["status"] = "online"
 
@@ -132,19 +137,25 @@ async def laptop_websocket(websocket: WebSocket, laptop_id: str):
                 )
 
             elif data.get("type") == "command_result":
+
                 print(
                     f"Command result from {laptop_id}: "
-                    f"{data.get('command')} - {data.get('result')}"
+                    f"{data.get('command')} - "
+                    f"{data.get('result')}"
                 )
 
     except WebSocketDisconnect:
+
         print(f"Laptop disconnected: {laptop_id}")
 
     except Exception as e:
+
         print(f"WebSocket error for {laptop_id}: {e}")
 
     finally:
+
         if connected_laptops.get(laptop_id) is laptop_data:
+
             connected_laptops[laptop_id]["status"] = "offline"
             connected_laptops[laptop_id]["websocket"] = None
 
@@ -155,9 +166,11 @@ async def laptop_websocket(websocket: WebSocket, laptop_id: str):
 
 @app.get("/laptops")
 async def get_laptops():
+
     result = {}
 
     for laptop_id, laptop in connected_laptops.items():
+
         result[laptop_id] = {
             "status": laptop.get("status", "offline"),
             "last_seen": (
@@ -176,15 +189,37 @@ async def get_laptops():
     return JSONResponse(content=result)
 
 
-# ====================== MANUAL COMMAND ======================
+# ====================== COMMANDS ======================
 
-@app.post("/command/{laptop_id}")
-async def send_command(
+ALLOWED_COMMANDS = {
+    "lock",
+    "sleep",
+    "restart",
+    "shutdown",
+
+    "open_chrome",
+    "open_notepad",
+    "open_calculator",
+    "open_youtube",
+    "open_google",
+    "open_downloads",
+    "open_documents",
+
+    "take_screenshot",
+
+    "volume_up",
+    "volume_down",
+    "mute",
+    "play_pause"
+}
+
+
+# ====================== SEND COMMAND TO LAPTOP ======================
+
+async def send_command_to_laptop(
     laptop_id: str,
-    command: dict,
-    authorization: str | None = Header(default=None)
+    requested_command: str
 ):
-    check_token(authorization)
 
     if laptop_id not in connected_laptops:
         raise HTTPException(
@@ -194,22 +229,16 @@ async def send_command(
 
     laptop = connected_laptops[laptop_id]
 
-    if laptop["status"] != "online" or laptop["websocket"] is None:
+    if (
+        laptop["status"] != "online"
+        or laptop["websocket"] is None
+    ):
         raise HTTPException(
             status_code=404,
             detail="Laptop is offline"
         )
 
-    allowed_commands = {
-        "lock",
-        "sleep",
-        "restart",
-        "shutdown"
-    }
-
-    requested_command = command.get("command")
-
-    if requested_command not in allowed_commands:
+    if requested_command not in ALLOWED_COMMANDS:
         raise HTTPException(
             status_code=400,
             detail="Invalid command"
@@ -227,10 +256,117 @@ async def send_command(
     }
 
 
+# ====================== MANUAL COMMAND ======================
+
+@app.post("/command/{laptop_id}")
+async def send_command(
+    laptop_id: str,
+    command: dict,
+    authorization: str | None = Header(default=None)
+):
+
+    check_token(authorization)
+
+    requested_command = command.get("command")
+
+    return await send_command_to_laptop(
+        laptop_id,
+        requested_command
+    )
+
+
 # ====================== AI CHAT MODEL ======================
 
 class AIChatRequest(BaseModel):
     message: str
+
+
+# ====================== AI SYSTEM PROMPT ======================
+
+AI_SYSTEM_PROMPT = """
+You are Remote Control AI, an assistant for the user's own Windows laptop.
+
+You must return ONLY valid JSON.
+Do not use Markdown.
+Do not include explanations outside the JSON.
+
+For a normal question, return:
+
+{
+  "type": "chat",
+  "command": null,
+  "message": "your answer"
+}
+
+For a safe laptop command, return:
+
+{
+  "type": "command",
+  "command": "command_name",
+  "message": "short response"
+}
+
+For restart or shutdown, ask for confirmation first:
+
+{
+  "type": "confirmation",
+  "command": "restart",
+  "message": "Are you sure you want to restart your laptop?"
+}
+
+Allowed commands:
+
+lock
+sleep
+restart
+shutdown
+
+open_chrome
+open_notepad
+open_calculator
+open_youtube
+open_google
+open_downloads
+open_documents
+
+take_screenshot
+
+volume_up
+volume_down
+mute
+play_pause
+
+Command examples:
+
+"Open Chrome" = open_chrome
+"Launch Notepad" = open_notepad
+"Open Calculator" = open_calculator
+"Go to YouTube" = open_youtube
+"Open Google" = open_google
+"Open my Downloads folder" = open_downloads
+"Open Documents" = open_documents
+"Lock my laptop" = lock
+"Put my laptop to sleep" = sleep
+"Take a screenshot" = take_screenshot
+"Increase volume" = volume_up
+"Decrease volume" = volume_down
+"Mute the volume" = mute
+"Play music" = play_pause
+"Pause music" = play_pause
+
+For restart and shutdown:
+
+- Never execute immediately.
+- First ask for confirmation.
+- If the user clearly confirms with "yes", "confirm", "do it", or similar,
+  return the actual command.
+
+Do not invent commands.
+
+Do not claim a command was executed unless the server sends it successfully.
+
+Answer laptop information questions using the supplied laptop information.
+"""
 
 
 # ====================== AI CHAT ======================
@@ -240,6 +376,7 @@ async def ai_chat(
     request: AIChatRequest,
     authorization: str | None = Header(default=None)
 ):
+
     check_token(authorization)
 
     if ai_client is None:
@@ -251,46 +388,149 @@ async def ai_chat(
     laptop = connected_laptops.get("my-laptop")
 
     if laptop and laptop["status"] == "online":
-        laptop_context = f"""
-Laptop status: Online
-Battery: {laptop.get("battery")}%
-Charging: {laptop.get("charging")}
-CPU usage: {laptop.get("cpu_usage")}%
-RAM usage: {laptop.get("ram_usage")}%
-Hostname: {laptop.get("hostname")}
-Windows version: {laptop.get("windows_version")}
-"""
+
+        laptop_context = {
+            "status": "Online",
+            "battery": laptop.get("battery"),
+            "charging": laptop.get("charging"),
+            "cpu_usage": laptop.get("cpu_usage"),
+            "ram_usage": laptop.get("ram_usage"),
+            "hostname": laptop.get("hostname"),
+            "windows_version": laptop.get("windows_version")
+        }
+
     else:
-        laptop_context = "Laptop status: Offline"
+
+        laptop_context = {
+            "status": "Offline"
+        }
 
     prompt = f"""
-You are Remote Control AI, an assistant for the user's own Windows laptop.
-
-Answer clearly and briefly.
-
-You can explain laptop information and help with safe computer-management
-tasks. Do not claim that a command was executed unless the server confirms it.
+{AI_SYSTEM_PROMPT}
 
 Current laptop information:
-{laptop_context}
+
+{json.dumps(laptop_context, indent=2)}
 
 User message:
+
 {request.message}
 """
 
     try:
+
         response = ai_client.models.generate_content(
             model="gemini-3.6-flash",
             contents=prompt
         )
 
+        raw_reply = response.text.strip()
+
+        # Remove Markdown code fences if Gemini adds them.
+        if raw_reply.startswith("```"):
+
+            raw_reply = raw_reply.replace("```json", "")
+            raw_reply = raw_reply.replace("```", "")
+            raw_reply = raw_reply.strip()
+
+        ai_result = json.loads(raw_reply)
+
+        result_type = ai_result.get("type", "chat")
+        command = ai_result.get("command")
+        message = ai_result.get(
+            "message",
+            "I could not understand that request."
+        )
+
+        # ====================== NORMAL CHAT ======================
+
+        if result_type == "chat":
+
+            return {
+                "success": True,
+                "type": "chat",
+                "command": None,
+                "reply": message,
+                "laptop": laptop_context
+            }
+
+        # ====================== CONFIRMATION ======================
+
+        if result_type == "confirmation":
+
+            return {
+                "success": True,
+                "type": "confirmation",
+                "command": command,
+                "reply": message,
+                "laptop": laptop_context
+            }
+
+        # ====================== EXECUTE COMMAND ======================
+
+        if result_type == "command" and command:
+
+            if command not in ALLOWED_COMMANDS:
+
+                return {
+                    "success": True,
+                    "type": "chat",
+                    "command": None,
+                    "reply": "That command is not available."
+                }
+
+            # Extra protection for dangerous commands.
+            if command in {"restart", "shutdown"}:
+
+                return {
+                    "success": True,
+                    "type": "confirmation",
+                    "command": command,
+                    "reply": (
+                        "Please confirm before executing "
+                        f"{command}."
+                    )
+                }
+
+            command_result = await send_command_to_laptop(
+                "my-laptop",
+                command
+            )
+
+            return {
+                "success": True,
+                "type": "command",
+                "command": command,
+                "reply": message,
+                "command_sent": command_result["success"],
+                "laptop": laptop_context
+            }
+
         return {
             "success": True,
-            "reply": response.text,
+            "type": "chat",
+            "command": None,
+            "reply": message,
             "laptop": laptop_context
         }
 
+    except json.JSONDecodeError:
+
+        print("Gemini returned invalid JSON:", raw_reply)
+
+        return {
+            "success": True,
+            "type": "chat",
+            "command": None,
+            "reply": raw_reply,
+            "laptop": laptop_context
+        }
+
+    except HTTPException:
+        raise
+
     except Exception as e:
+
         print(f"Gemini API error: {e}")
 
         raise HTTPException(
@@ -302,16 +542,24 @@ User message:
 # ====================== LAPTOP MONITOR ======================
 
 async def monitor_laptops():
-    while True:
-        now = datetime.now(timezone.utc)
 
-        for laptop_id, laptop in list(connected_laptops.items()):
+    while True:
+
+        current_time = datetime.now(timezone.utc)
+
+        for laptop_id, laptop in list(
+            connected_laptops.items()
+        ):
+
             last_seen = laptop.get("last_seen")
 
             if last_seen is None:
                 continue
 
-            if (now - last_seen).total_seconds() > 30:
+            if (
+                current_time - last_seen
+            ).total_seconds() > 30:
+
                 print(f"Laptop timed out: {laptop_id}")
 
                 laptop["status"] = "offline"
@@ -324,5 +572,7 @@ async def monitor_laptops():
 
 @app.on_event("startup")
 async def startup_event():
+
     asyncio.create_task(monitor_laptops())
+
     print("Remote Control AI server started")
