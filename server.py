@@ -29,7 +29,11 @@ def check_token(authorization: str | None):
 async def home():
     return {
         "message": "Remote Control AI server is running",
-        "laptops_online": len(connected_laptops)
+        "laptops_online": sum(
+            1
+            for laptop in connected_laptops.values()
+            if laptop["status"] == "online"
+        )
     }
 
 
@@ -37,11 +41,33 @@ async def home():
 async def laptop_websocket(websocket: WebSocket, laptop_id: str):
     await websocket.accept()
 
-    connected_laptops[laptop_id] = {
+    # Create a unique record for this connection
+    laptop_data = {
         "websocket": websocket,
         "status": "online",
-        "last_seen": datetime.now(timezone.utc)
+        "last_seen": datetime.now(timezone.utc),
+        "battery": None,
+        "charging": None,
+        "cpu_usage": None,
+        "ram_usage": None,
+        "hostname": laptop_id,
+        "windows_version": None
     }
+
+    # Check whether this laptop already has another connection
+    old_laptop = connected_laptops.get(laptop_id)
+
+    if old_laptop:
+        old_websocket = old_laptop.get("websocket")
+
+        if old_websocket:
+            try:
+                await old_websocket.close()
+            except Exception:
+                pass
+
+    # Store the new active connection
+    connected_laptops[laptop_id] = laptop_data
 
     print(f"Laptop connected: {laptop_id}")
 
@@ -49,11 +75,33 @@ async def laptop_websocket(websocket: WebSocket, laptop_id: str):
         while True:
             data = await websocket.receive_json()
 
+            # Ignore messages from an old connection
+            if connected_laptops.get(laptop_id) is not laptop_data:
+                print(f"Ignoring old connection: {laptop_id}")
+                break
+
             if data.get("type") == "heartbeat":
-                connected_laptops[laptop_id]["last_seen"] = (
-                    datetime.now(timezone.utc)
+                laptop_data["last_seen"] = datetime.now(timezone.utc)
+                laptop_data["status"] = "online"
+
+                # Update laptop information
+                for key in [
+                    "battery",
+                    "charging",
+                    "cpu_usage",
+                    "ram_usage",
+                    "hostname",
+                    "windows_version"
+                ]:
+                    if key in data:
+                        laptop_data[key] = data[key]
+
+                print(
+                    f"Heartbeat: {laptop_id} | "
+                    f"Battery: {laptop_data['battery']}% | "
+                    f"CPU: {laptop_data['cpu_usage']}% | "
+                    f"RAM: {laptop_data['ram_usage']}%"
                 )
-                connected_laptops[laptop_id]["status"] = "online"
 
             elif data.get("type") == "command_result":
                 print(
@@ -64,8 +112,16 @@ async def laptop_websocket(websocket: WebSocket, laptop_id: str):
     except WebSocketDisconnect:
         print(f"Laptop disconnected: {laptop_id}")
 
+    except Exception as e:
+        print(f"WebSocket error for {laptop_id}: {e}")
+
     finally:
-        connected_laptops.pop(laptop_id, None)
+        # Only clean up if this is still the active connection
+        if connected_laptops.get(laptop_id) is laptop_data:
+            connected_laptops[laptop_id]["status"] = "offline"
+            connected_laptops[laptop_id]["websocket"] = None
+
+            print(f"Marked laptop offline: {laptop_id}")
 
 
 @app.get("/laptops")
@@ -74,8 +130,18 @@ async def get_laptops():
 
     for laptop_id, laptop in connected_laptops.items():
         result[laptop_id] = {
-            "status": laptop["status"],
-            "last_seen": laptop["last_seen"].isoformat()
+            "status": laptop.get("status", "offline"),
+            "last_seen": (
+                laptop["last_seen"].isoformat()
+                if laptop.get("last_seen")
+                else None
+            ),
+            "battery": laptop.get("battery"),
+            "charging": laptop.get("charging"),
+            "cpu_usage": laptop.get("cpu_usage"),
+            "ram_usage": laptop.get("ram_usage"),
+            "hostname": laptop.get("hostname"),
+            "windows_version": laptop.get("windows_version")
         }
 
     return JSONResponse(content=result)
@@ -90,6 +156,14 @@ async def send_command(
     check_token(authorization)
 
     if laptop_id not in connected_laptops:
+        raise HTTPException(
+            status_code=404,
+            detail="Laptop is offline"
+        )
+
+    laptop = connected_laptops[laptop_id]
+
+    if laptop["status"] != "online" or laptop["websocket"] is None:
         raise HTTPException(
             status_code=404,
             detail="Laptop is offline"
@@ -110,9 +184,7 @@ async def send_command(
             detail="Invalid command"
         )
 
-    websocket = connected_laptops[laptop_id]["websocket"]
-
-    await websocket.send_json({
+    await laptop["websocket"].send_json({
         "type": "command",
         "command": requested_command
     })
@@ -128,12 +200,18 @@ async def monitor_laptops():
     while True:
         now = datetime.now(timezone.utc)
 
-        for laptop_id in list(connected_laptops.keys()):
-            last_seen = connected_laptops[laptop_id]["last_seen"]
+        for laptop_id, laptop in list(connected_laptops.items()):
+            last_seen = laptop.get("last_seen")
+
+            if last_seen is None:
+                continue
 
             if (now - last_seen).total_seconds() > 30:
                 print(f"Laptop timed out: {laptop_id}")
-                connected_laptops.pop(laptop_id, None)
+
+                # Only mark the current connection offline
+                laptop["status"] = "offline"
+                laptop["websocket"] = None
 
         await asyncio.sleep(10)
 
