@@ -22,6 +22,8 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not REMOTE_TOKEN:
     print("WARNING: REMOTE_TOKEN is not configured")
+else:
+    print("REMOTE_TOKEN is configured")
 
 if not GEMINI_API_KEY:
     print("WARNING: GEMINI_API_KEY is not configured")
