@@ -17,8 +17,6 @@ app = FastAPI(title="Remote Control AI")
 
 connected_laptops = {}
 
-# Laptop is considered offline if no heartbeat is received
-# within this many seconds.
 HEARTBEAT_TIMEOUT = 15
 
 
@@ -26,17 +24,29 @@ HEARTBEAT_TIMEOUT = 15
 # ENVIRONMENT VARIABLES
 # ============================================================
 
-REMOTE_TOKEN = os.getenv("REMOTE_TOKEN", "").strip()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+REMOTE_TOKEN = os.getenv(
+    "REMOTE_TOKEN",
+    "RC_AI_2026_Gowtham_7Kp9X4mQ2"
+).strip()
+
+GEMINI_API_KEY = os.getenv(
+    "GEMINI_API_KEY",
+    ""
+).strip()
 
 
-if not REMOTE_TOKEN:
-    print("WARNING: REMOTE_TOKEN is not configured")
-else:
+print("========================================")
+print("REMOTE CONTROL AI")
+print("========================================")
+
+if REMOTE_TOKEN:
     print("REMOTE_TOKEN is configured")
+else:
+    print("WARNING: REMOTE_TOKEN is not configured")
 
-
-if not GEMINI_API_KEY:
+if GEMINI_API_KEY:
+    print("GEMINI_API_KEY is configured")
+else:
     print("WARNING: GEMINI_API_KEY is not configured")
 
 
@@ -48,30 +58,39 @@ ai_client = None
 
 if GEMINI_API_KEY:
     try:
-        ai_client = genai.Client(api_key=GEMINI_API_KEY)
+        ai_client = genai.Client(
+            api_key=GEMINI_API_KEY
+        )
+
         print("Gemini AI initialized")
+
     except Exception as e:
-        print(f"Gemini initialization error: {e}")
+        print(
+            f"Gemini initialization error: {e}"
+        )
 
 
 # ============================================================
 # SECURITY
 # ============================================================
 
-def check_token(authorization: str | None):
-    """
-    Validate:
-
-        Authorization: Bearer YOUR_REMOTE_TOKEN
-    """
+def check_token(
+    authorization: str | None
+):
 
     if not REMOTE_TOKEN:
+
         raise HTTPException(
             status_code=500,
-            detail="Remote token is not configured on server"
+            detail="REMOTE_TOKEN is not configured"
         )
 
     if authorization is None:
+
+        print(
+            "AUTH ERROR: Authorization header missing"
+        )
+
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing token"
@@ -79,17 +98,22 @@ def check_token(authorization: str | None):
 
     authorization = authorization.strip()
 
-    expected = f"Bearer {REMOTE_TOKEN}"
+    expected = (
+        f"Bearer {REMOTE_TOKEN}"
+    )
 
     if authorization != expected:
-        print("Authentication failed")
-        print("Authorization header was received")
-        print("But the supplied token did not match the server token")
+
+        print(
+            "AUTH ERROR: Invalid token"
+        )
 
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing token"
         )
+
+    print("Authentication successful")
 
 
 # ============================================================
@@ -99,13 +123,17 @@ def check_token(authorization: str | None):
 @app.get("/")
 async def home():
 
-    current_time = datetime.now(timezone.utc)
+    current_time = datetime.now(
+        timezone.utc
+    )
 
     online_count = 0
 
     for laptop in connected_laptops.values():
 
-        last_seen = laptop.get("last_seen")
+        last_seen = laptop.get(
+            "last_seen"
+        )
 
         if last_seen:
 
@@ -113,13 +141,23 @@ async def home():
                 current_time - last_seen
             ).total_seconds()
 
-            if seconds_since_heartbeat <= HEARTBEAT_TIMEOUT:
+            if (
+                seconds_since_heartbeat
+                <= HEARTBEAT_TIMEOUT
+            ):
+
                 online_count += 1
 
     return {
-        "message": "Remote Control AI server is running",
-        "laptops_online": online_count,
-        "ai_enabled": ai_client is not None
+
+        "message":
+            "Remote Control AI server is running",
+
+        "laptops_online":
+            online_count,
+
+        "ai_enabled":
+            ai_client is not None
     }
 
 
@@ -127,7 +165,9 @@ async def home():
 # LAPTOP WEBSOCKET
 # ============================================================
 
-@app.websocket("/ws/laptop/{laptop_id}")
+@app.websocket(
+    "/ws/laptop/{laptop_id}"
+)
 async def laptop_websocket(
     websocket: WebSocket,
     laptop_id: str
@@ -137,57 +177,84 @@ async def laptop_websocket(
 
     laptop_data = {
 
-        "websocket": websocket,
+        "websocket":
+            websocket,
 
-        "status": "online",
+        "status":
+            "online",
 
-        "last_seen": datetime.now(timezone.utc),
+        "last_seen":
+            datetime.now(timezone.utc),
 
-        "battery": None,
+        "battery":
+            None,
 
-        "charging": None,
+        "charging":
+            None,
 
-        "cpu_usage": None,
+        "cpu_usage":
+            None,
 
-        "ram_usage": None,
+        "ram_usage":
+            None,
 
-        "hostname": laptop_id,
+        "hostname":
+            laptop_id,
 
-        "windows_version": None
+        "windows_version":
+            None
     }
 
-    # --------------------------------------------------------
-    # Replace old connection if one already exists
-    # --------------------------------------------------------
-
-    old_laptop = connected_laptops.get(laptop_id)
+    old_laptop = connected_laptops.get(
+        laptop_id
+    )
 
     if old_laptop:
 
-        old_websocket = old_laptop.get("websocket")
+        old_websocket = (
+            old_laptop.get("websocket")
+        )
 
         if old_websocket:
 
             try:
+
                 await old_websocket.close()
+
             except Exception:
+
                 pass
 
-    connected_laptops[laptop_id] = laptop_data
+    connected_laptops[
+        laptop_id
+    ] = laptop_data
 
-    print(f"Laptop connected: {laptop_id}")
+    print(
+        f"Laptop connected: {laptop_id}"
+    )
 
     try:
 
         while True:
 
-            data = await websocket.receive_json()
+            data = (
+                await websocket.receive_json()
+            )
 
-            # Ignore messages from an old connection.
-            if connected_laptops.get(laptop_id) is not laptop_data:
+            # ------------------------------------------------
+            # Make sure this is the current connection
+            # ------------------------------------------------
+
+            if (
+                connected_laptops.get(
+                    laptop_id
+                )
+                is not laptop_data
+            ):
 
                 print(
-                    f"Ignoring old connection: {laptop_id}"
+                    f"Ignoring old connection: "
+                    f"{laptop_id}"
                 )
 
                 break
@@ -196,71 +263,108 @@ async def laptop_websocket(
             # HEARTBEAT
             # =================================================
 
-            if data.get("type") == "heartbeat":
+            if data.get(
+                "type"
+            ) == "heartbeat":
 
-                laptop_data["last_seen"] = (
-                    datetime.now(timezone.utc)
+                laptop_data[
+                    "last_seen"
+                ] = datetime.now(
+                    timezone.utc
                 )
 
-                laptop_data["status"] = "online"
+                laptop_data[
+                    "status"
+                ] = "online"
 
                 for key in [
+
                     "battery",
+
                     "charging",
+
                     "cpu_usage",
+
                     "ram_usage",
+
                     "hostname",
+
                     "windows_version"
+
                 ]:
 
                     if key in data:
 
-                        laptop_data[key] = data[key]
+                        laptop_data[
+                            key
+                        ] = data[key]
 
                 print(
+
                     f"Heartbeat: {laptop_id} | "
-                    f"Battery: {laptop_data['battery']}% | "
-                    f"CPU: {laptop_data['cpu_usage']}% | "
-                    f"RAM: {laptop_data['ram_usage']}%"
+
+                    f"Battery: "
+                    f"{laptop_data['battery']}% | "
+
+                    f"CPU: "
+                    f"{laptop_data['cpu_usage']}% | "
+
+                    f"RAM: "
+                    f"{laptop_data['ram_usage']}%"
                 )
 
             # =================================================
             # COMMAND RESULT
             # =================================================
 
-            elif data.get("type") == "command_result":
+            elif data.get(
+                "type"
+            ) == "command_result":
 
                 print(
-                    f"Command result from {laptop_id}: "
+
+                    f"Command result from "
+                    f"{laptop_id}: "
+
                     f"{data.get('command')} - "
+
                     f"{data.get('result')}"
                 )
 
     except WebSocketDisconnect:
 
         print(
-            f"Laptop disconnected: {laptop_id}"
+            f"Laptop disconnected: "
+            f"{laptop_id}"
         )
 
     except Exception as e:
 
         print(
-            f"WebSocket error for {laptop_id}: {e}"
+            f"WebSocket error for "
+            f"{laptop_id}: {e}"
         )
 
     finally:
 
-        # Only mark this connection offline if it is still
-        # the current connection for this laptop.
+        if (
+            connected_laptops.get(
+                laptop_id
+            )
+            is laptop_data
+        ):
 
-        if connected_laptops.get(laptop_id) is laptop_data:
+            connected_laptops[
+                laptop_id
+            ]["status"] = "offline"
 
-            connected_laptops[laptop_id]["status"] = "offline"
-
-            connected_laptops[laptop_id]["websocket"] = None
+            connected_laptops[
+                laptop_id
+            ]["websocket"] = None
 
             print(
-                f"Marked laptop offline: {laptop_id}"
+                f"Marked laptop offline: "
+                f"{laptop_id}"
             )
 
 
@@ -273,15 +377,17 @@ async def get_laptops():
 
     result = {}
 
-    current_time = datetime.now(timezone.utc)
+    current_time = datetime.now(
+        timezone.utc
+    )
 
-    for laptop_id, laptop in connected_laptops.items():
+    for laptop_id, laptop in (
+        connected_laptops.items()
+    ):
 
-        last_seen = laptop.get("last_seen")
-
-        # ----------------------------------------------------
-        # Calculate online status from latest heartbeat
-        # ----------------------------------------------------
+        last_seen = laptop.get(
+            "last_seen"
+        )
 
         if last_seen is None:
 
@@ -294,41 +400,56 @@ async def get_laptops():
             ).total_seconds()
 
             is_online = (
-                seconds_since_heartbeat <= HEARTBEAT_TIMEOUT
+                seconds_since_heartbeat
+                <= HEARTBEAT_TIMEOUT
             )
 
-        # Update stored status.
-
-        laptop["status"] = (
-            "online" if is_online else "offline"
+        laptop[
+            "status"
+        ] = (
+            "online"
+            if is_online
+            else "offline"
         )
 
-        result[laptop_id] = {
+        result[
+            laptop_id
+        ] = {
 
-            "status": laptop["status"],
+            "status":
+                laptop["status"],
 
-            "last_seen": (
-                last_seen.isoformat()
-                if last_seen
-                else None
-            ),
+            "last_seen":
+                (
+                    last_seen.isoformat()
+                    if last_seen
+                    else None
+                ),
 
-            "battery": laptop.get("battery"),
+            "battery":
+                laptop.get("battery"),
 
-            "charging": laptop.get("charging"),
+            "charging":
+                laptop.get("charging"),
 
-            "cpu_usage": laptop.get("cpu_usage"),
+            "cpu_usage":
+                laptop.get("cpu_usage"),
 
-            "ram_usage": laptop.get("ram_usage"),
+            "ram_usage":
+                laptop.get("ram_usage"),
 
-            "hostname": laptop.get("hostname"),
+            "hostname":
+                laptop.get("hostname"),
 
-            "windows_version": laptop.get(
-                "windows_version"
-            )
+            "windows_version":
+                laptop.get(
+                    "windows_version"
+                )
         }
 
-    return JSONResponse(content=result)
+    return JSONResponse(
+        content=result
+    )
 
 
 # ============================================================
@@ -384,20 +505,27 @@ async def send_command_to_laptop(
     # Check laptop exists
     # --------------------------------------------------------
 
-    if laptop_id not in connected_laptops:
+    if (
+        laptop_id
+        not in connected_laptops
+    ):
 
         raise HTTPException(
             status_code=404,
             detail="Laptop is offline"
         )
 
-    laptop = connected_laptops[laptop_id]
+    laptop = connected_laptops[
+        laptop_id
+    ]
 
     # --------------------------------------------------------
-    # Check latest heartbeat
+    # Check heartbeat
     # --------------------------------------------------------
 
-    last_seen = laptop.get("last_seen")
+    last_seen = laptop.get(
+        "last_seen"
+    )
 
     if last_seen is None:
 
@@ -407,17 +535,24 @@ async def send_command_to_laptop(
         )
 
     seconds_since_heartbeat = (
-        datetime.now(timezone.utc) - last_seen
+        datetime.now(timezone.utc)
+        - last_seen
     ).total_seconds()
 
     if (
-        seconds_since_heartbeat > HEARTBEAT_TIMEOUT
-        or laptop.get("websocket") is None
+        seconds_since_heartbeat
+        > HEARTBEAT_TIMEOUT
+        or laptop.get("websocket")
+        is None
     ):
 
-        laptop["status"] = "offline"
+        laptop[
+            "status"
+        ] = "offline"
 
-        laptop["websocket"] = None
+        laptop[
+            "websocket"
+        ] = None
 
         raise HTTPException(
             status_code=404,
@@ -428,7 +563,10 @@ async def send_command_to_laptop(
     # Validate command
     # --------------------------------------------------------
 
-    if requested_command not in ALLOWED_COMMANDS:
+    if (
+        requested_command
+        not in ALLOWED_COMMANDS
+    ):
 
         raise HTTPException(
             status_code=400,
@@ -439,25 +577,34 @@ async def send_command_to_laptop(
     # Send command through WebSocket
     # --------------------------------------------------------
 
-    await laptop["websocket"].send_json({
+    await laptop[
+        "websocket"
+    ].send_json({
 
-        "type": "command",
+        "type":
+            "command",
 
-        "command": requested_command
+        "command":
+            requested_command
     })
 
     print(
-        f"Command sent: {laptop_id} -> "
+
+        f"COMMAND SENT -> "
+        f"{laptop_id}: "
         f"{requested_command}"
     )
 
     return {
 
-        "success": True,
+        "success":
+            True,
 
-        "message": "Command sent to laptop",
+        "message":
+            "Command sent to laptop",
 
-        "command": requested_command
+        "command":
+            requested_command
     }
 
 
@@ -465,29 +612,39 @@ async def send_command_to_laptop(
 # MANUAL COMMAND
 # ============================================================
 
-@app.post("/command/{laptop_id}")
+@app.post(
+    "/command/{laptop_id}"
+)
 async def send_command(
 
     laptop_id: str,
 
     command: dict,
 
-    authorization: str | None = Header(
-        default=None
-    )
+    authorization: str | None =
+        Header(default=None)
 ):
 
+    print(
+        f"Command request received: "
+        f"{laptop_id}"
+    )
+
     # --------------------------------------------------------
-    # SECURITY CHECK
+    # Authenticate
     # --------------------------------------------------------
 
-    check_token(authorization)
+    check_token(
+        authorization
+    )
 
     # --------------------------------------------------------
     # Get command
     # --------------------------------------------------------
 
-    requested_command = command.get("command")
+    requested_command = (
+        command.get("command")
+    )
 
     if not requested_command:
 
@@ -497,25 +654,29 @@ async def send_command(
         )
 
     print(
-        f"Command request received: "
-        f"{laptop_id} -> {requested_command}"
+        f"Requested command: "
+        f"{requested_command}"
     )
 
     # --------------------------------------------------------
-    # Send command
+    # Send to laptop
     # --------------------------------------------------------
 
     return await send_command_to_laptop(
+
         laptop_id,
+
         requested_command
     )
 
 
 # ============================================================
-# AI CHAT REQUEST
+# AI REQUEST
 # ============================================================
 
-class AIChatRequest(BaseModel):
+class AIChatRequest(
+    BaseModel
+):
 
     message: str
 
@@ -535,7 +696,6 @@ Do not use Markdown.
 
 Do not include explanations outside the JSON.
 
-
 For a normal question, return:
 
 {
@@ -543,7 +703,6 @@ For a normal question, return:
 "command": null,
 "message": "your answer"
 }
-
 
 For a safe laptop command, return:
 
@@ -553,7 +712,6 @@ For a safe laptop command, return:
 "message": "short response"
 }
 
-
 For restart or shutdown, ask for confirmation first:
 
 {
@@ -561,7 +719,6 @@ For restart or shutdown, ask for confirmation first:
 "command": "restart",
 "message": "Are you sure you want to restart your laptop?"
 }
-
 
 Allowed commands:
 
@@ -584,7 +741,6 @@ volume_up
 volume_down
 mute
 play_pause
-
 
 Command examples:
 
@@ -618,7 +774,6 @@ Command examples:
 
 "Pause music" = play_pause
 
-
 For restart and shutdown:
 
 - Never execute immediately.
@@ -646,19 +801,20 @@ async def ai_chat(
 
     request: AIChatRequest,
 
-    authorization: str | None = Header(
-        default=None
-    )
+    authorization: str | None =
+        Header(default=None)
 ):
 
     # --------------------------------------------------------
-    # SECURITY
+    # Authenticate
     # --------------------------------------------------------
 
-    check_token(authorization)
+    check_token(
+        authorization
+    )
 
     # --------------------------------------------------------
-    # Check Gemini
+    # Check AI
     # --------------------------------------------------------
 
     if ai_client is None:
@@ -676,14 +832,15 @@ async def ai_chat(
         "my-laptop"
     )
 
-    # --------------------------------------------------------
-    # Current laptop status
-    # --------------------------------------------------------
-
     laptop_context = {
 
-        "status": "Offline"
+        "status":
+            "Offline"
     }
+
+    # --------------------------------------------------------
+    # Laptop information
+    # --------------------------------------------------------
 
     if laptop:
 
@@ -705,27 +862,33 @@ async def ai_chat(
 
                 laptop_context = {
 
-                    "status": "Online",
+                    "status":
+                        "Online",
 
-                    "battery": laptop.get(
-                        "battery"
-                    ),
+                    "battery":
+                        laptop.get(
+                            "battery"
+                        ),
 
-                    "charging": laptop.get(
-                        "charging"
-                    ),
+                    "charging":
+                        laptop.get(
+                            "charging"
+                        ),
 
-                    "cpu_usage": laptop.get(
-                        "cpu_usage"
-                    ),
+                    "cpu_usage":
+                        laptop.get(
+                            "cpu_usage"
+                        ),
 
-                    "ram_usage": laptop.get(
-                        "ram_usage"
-                    ),
+                    "ram_usage":
+                        laptop.get(
+                            "ram_usage"
+                        ),
 
-                    "hostname": laptop.get(
-                        "hostname"
-                    ),
+                    "hostname":
+                        laptop.get(
+                            "hostname"
+                        ),
 
                     "windows_version":
                         laptop.get(
@@ -735,15 +898,20 @@ async def ai_chat(
 
             else:
 
-                laptop["status"] = "offline"
+                laptop[
+                    "status"
+                ] = "offline"
 
-                laptop["websocket"] = None
+                laptop[
+                    "websocket"
+                ] = None
 
     # --------------------------------------------------------
-    # Create AI prompt
+    # AI prompt
     # --------------------------------------------------------
 
     prompt = f"""
+
 {AI_SYSTEM_PROMPT}
 
 Current laptop information:
@@ -756,40 +924,44 @@ Current laptop information:
 User message:
 
 {request.message}
+
 """
 
     try:
 
-        # ----------------------------------------------------
-        # Gemini request
-        # ----------------------------------------------------
+        response = (
+            ai_client.models.generate_content(
 
-        response = ai_client.models.generate_content(
+                model="gemini-3.6-flash",
 
-            model="gemini-3.6-flash",
-
-            contents=prompt
+                contents=prompt
+            )
         )
 
-        raw_reply = response.text.strip()
+        raw_reply = (
+            response.text.strip()
+        )
 
         # ----------------------------------------------------
-        # Remove Markdown fences
+        # Remove Markdown code fences
         # ----------------------------------------------------
 
-        if raw_reply.startswith("```"):
+        if raw_reply.startswith(
+            "```"
+        ):
 
-            raw_reply = raw_reply.replace(
-                "```json",
-                ""
+            raw_reply = (
+                raw_reply
+                .replace(
+                    "```json",
+                    ""
+                )
+                .replace(
+                    "```",
+                    ""
+                )
+                .strip()
             )
-
-            raw_reply = raw_reply.replace(
-                "```",
-                ""
-            )
-
-            raw_reply = raw_reply.strip()
 
         # ----------------------------------------------------
         # Parse JSON
@@ -809,27 +981,35 @@ User message:
         )
 
         message = ai_result.get(
+
             "message",
-            "I could not understand that request."
+
+            "I could not understand "
+            "that request."
         )
 
         # ====================================================
-        # NORMAL CHAT
+        # CHAT
         # ====================================================
 
         if result_type == "chat":
 
             return {
 
-                "success": True,
+                "success":
+                    True,
 
-                "type": "chat",
+                "type":
+                    "chat",
 
-                "command": None,
+                "command":
+                    None,
 
-                "reply": message,
+                "reply":
+                    message,
 
-                "laptop": laptop_context
+                "laptop":
+                    laptop_context
             }
 
         # ====================================================
@@ -840,19 +1020,24 @@ User message:
 
             return {
 
-                "success": True,
+                "success":
+                    True,
 
-                "type": "confirmation",
+                "type":
+                    "confirmation",
 
-                "command": command,
+                "command":
+                    command,
 
-                "reply": message,
+                "reply":
+                    message,
 
-                "laptop": laptop_context
+                "laptop":
+                    laptop_context
             }
 
         # ====================================================
-        # EXECUTE COMMAND
+        # COMMAND
         # ====================================================
 
         if (
@@ -860,22 +1045,29 @@ User message:
             and command
         ):
 
-            if command not in ALLOWED_COMMANDS:
+            if (
+                command
+                not in ALLOWED_COMMANDS
+            ):
 
                 return {
 
-                    "success": True,
+                    "success":
+                        True,
 
-                    "type": "chat",
+                    "type":
+                        "chat",
 
-                    "command": None,
+                    "command":
+                        None,
 
                     "reply":
-                        "That command is not available."
+                        "That command "
+                        "is not available."
                 }
 
             # ------------------------------------------------
-            # Extra protection
+            # Restart / shutdown protection
             # ------------------------------------------------
 
             if command in {
@@ -885,43 +1077,57 @@ User message:
 
                 return {
 
-                    "success": True,
+                    "success":
+                        True,
 
-                    "type": "confirmation",
+                    "type":
+                        "confirmation",
 
-                    "command": command,
+                    "command":
+                        command,
 
-                    "reply": (
-                        "Please confirm before "
-                        f"executing {command}."
-                    )
+                    "reply":
+                        (
+                            "Please confirm "
+                            "before executing "
+                            f"{command}."
+                        )
                 }
 
             # ------------------------------------------------
-            # Send command
+            # Execute command
             # ------------------------------------------------
 
             command_result = (
                 await send_command_to_laptop(
+
                     "my-laptop",
+
                     command
                 )
             )
 
             return {
 
-                "success": True,
+                "success":
+                    True,
 
-                "type": "command",
+                "type":
+                    "command",
 
-                "command": command,
+                "command":
+                    command,
 
-                "reply": message,
+                "reply":
+                    message,
 
                 "command_sent":
-                    command_result["success"],
+                    command_result[
+                        "success"
+                    ],
 
-                "laptop": laptop_context
+                "laptop":
+                    laptop_context
             }
 
         # ====================================================
@@ -930,20 +1136,21 @@ User message:
 
         return {
 
-            "success": True,
+            "success":
+                True,
 
-            "type": "chat",
+            "type":
+                "chat",
 
-            "command": None,
+            "command":
+                None,
 
-            "reply": message,
+            "reply":
+                message,
 
-            "laptop": laptop_context
+            "laptop":
+                laptop_context
         }
-
-    # ========================================================
-    # INVALID GEMINI JSON
-    # ========================================================
 
     except json.JSONDecodeError:
 
@@ -954,28 +1161,25 @@ User message:
 
         return {
 
-            "success": True,
+            "success":
+                True,
 
-            "type": "chat",
+            "type":
+                "chat",
 
-            "command": None,
+            "command":
+                None,
 
-            "reply": raw_reply,
+            "reply":
+                raw_reply,
 
-            "laptop": laptop_context
+            "laptop":
+                laptop_context
         }
-
-    # ========================================================
-    # HTTP ERROR
-    # ========================================================
 
     except HTTPException:
 
         raise
-
-    # ========================================================
-    # OTHER ERROR
-    # ========================================================
 
     except Exception as e:
 
@@ -1024,9 +1228,6 @@ async def monitor_laptops():
                 > HEARTBEAT_TIMEOUT
             ):
 
-                # Only print once when changing
-                # from online to offline.
-
                 if (
                     laptop.get("status")
                     == "online"
@@ -1037,9 +1238,13 @@ async def monitor_laptops():
                         f"{laptop_id}"
                     )
 
-                laptop["status"] = "offline"
+                laptop[
+                    "status"
+                ] = "offline"
 
-                laptop["websocket"] = None
+                laptop[
+                    "websocket"
+                ] = None
 
         await asyncio.sleep(5)
 
@@ -1048,7 +1253,9 @@ async def monitor_laptops():
 # STARTUP
 # ============================================================
 
-@app.on_event("startup")
+@app.on_event(
+    "startup"
+)
 async def startup_event():
 
     asyncio.create_task(
@@ -1056,5 +1263,13 @@ async def startup_event():
     )
 
     print(
+        "========================================"
+    )
+
+    print(
         "Remote Control AI server started"
+    )
+
+    print(
+        "========================================"
     )
