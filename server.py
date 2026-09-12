@@ -192,6 +192,9 @@ async def laptop_websocket(
         "charging":
             None,
 
+        "battery_time_minutes":
+            None,
+
         "cpu_usage":
             None,
 
@@ -283,6 +286,8 @@ async def laptop_websocket(
 
                     "charging",
 
+                    "battery_time_minutes",
+
                     "cpu_usage",
 
                     "ram_usage",
@@ -305,6 +310,9 @@ async def laptop_websocket(
 
                     f"Battery: "
                     f"{laptop_data['battery']}% | "
+
+                    f"Battery Time: "
+                    f"{laptop_data['battery_time_minutes']} min | "
 
                     f"CPU: "
                     f"{laptop_data['cpu_usage']}% | "
@@ -431,6 +439,11 @@ async def get_laptops():
 
             "charging":
                 laptop.get("charging"),
+
+            "battery_time_minutes":
+                laptop.get(
+                    "battery_time_minutes"
+                ),
 
             "cpu_usage":
                 laptop.get("cpu_usage"),
@@ -873,6 +886,11 @@ async def ai_chat(
                     "charging":
                         laptop.get(
                             "charging"
+                        ),
+
+                    "battery_time_minutes":
+                        laptop.get(
+                            "battery_time_minutes"
                         ),
 
                     "cpu_usage":
